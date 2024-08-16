@@ -1,10 +1,13 @@
 import os
 
+from django.core.files.storage import default_storage
+from django.http import JsonResponse
 from openai import OpenAI
 from dotenv import load_dotenv
 from rest_framework.response import Response
-from rest_framework.decorators import api_view
 from django.views.decorators.csrf import csrf_exempt
+from rest_framework.decorators import api_view
+import os
 
 
 @api_view(['POST'])
@@ -12,6 +15,28 @@ def echo(request):
     data = request.data
     data['message'] = 'hakndvskjai'
     return Response(data)
+
+
+@api_view(['POST'])
+def upload_file(request):
+    SOURCES_DIR = './mattprojecttry2/summariesAndDocuments/sources'
+    # Check if the request has a file in the 'file' parameter
+    if 'file' not in request.FILES:
+        return JsonResponse({'error': 'No file provided.'}, status=400)
+
+    file = request.FILES['file']
+    file_name = file.name
+
+    # Ensure the 'sources' directory exists
+    os.makedirs(SOURCES_DIR, exist_ok=True)
+
+    # Save the file
+    file_path = os.path.join(SOURCES_DIR, file_name)
+    with default_storage.open(file_path, 'wb+') as destination:
+        for chunk in file.chunks():
+            destination.write(chunk)
+    print("File added to sources: " + file_name)
+    return JsonResponse({'message': f'File {file_name} uploaded successfully.'})
 
 
 @csrf_exempt
@@ -39,6 +64,8 @@ def realQuestion(request):
     pdfs = pickPDF(request.data.get('prompt', ''))
     path = "./mattprojecttry2/summariesAndDocuments/text"
     context = ""
+    # remove spaces from pdfs list
+    pdfs = [x for x in pdfs if x != '']
     for (i, file) in enumerate(pdfs):
         with open(path + "/" + file, 'r', encoding='utf-8') as f:
             if i == 0:
@@ -48,7 +75,7 @@ def realQuestion(request):
         context = context[:int(4.3841932615960023299 * 15000)]
     return Response({"response": gpt35turbo(
         "You are a financial advisor answer these questions using the documents given.",
-        "Here are the summaries: " + context + "Here is the prompt: " + prompt)})
+        "Here are the summaries: " + context + "Here is the prompt: " + prompt), "\nSources": pdfs})
 
 
 @csrf_exempt
