@@ -9,6 +9,11 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view
 import os
 
+import time
+from pinecone import Pinecone, ServerlessSpec
+from sentence_transformers import SentenceTransformer
+import torch
+
 
 @api_view(['POST'])
 def echo(request):
@@ -16,6 +21,70 @@ def echo(request):
     data['message'] = 'hakndvskjai'
     return Response(data)
 
+
+@api_view(['POST'])
+def realQuestion(request):
+    load_dotenv()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    if device != 'cuda':
+        print(f"You are using {device}. This is much slower than using "
+              "a CUDA-enabled GPU. If on Colab you can change this by "
+              "clicking Runtime > Change runtime type > GPU.")
+    model = SentenceTransformer('all-MiniLM-L6-v2', device=device)
+    pc = Pinecone(api_key=(os.getenv('PINECONE_API_KEY') or 'PINECONE_API_KEY'))
+    cloud = 'aws'
+    region = 'us-east-1'
+
+    spec = ServerlessSpec(cloud=cloud, region=region)
+    index_name = 'semantic-search'
+
+
+    # check if index already exists (it shouldn't if this is first time)
+    if index_name not in pc.list_indexes().names():
+        # if does not exist, create index
+        pc.create_index(
+            index_name,
+            dimension=model.get_sentence_embedding_dimension(),
+            metric='cosine',
+            spec=spec
+        )
+        # wait for index to be initialized
+        while not pc.describe_index(index_name).status['ready']:
+            time.sleep(1)
+
+    # connect to index
+    index = pc.Index(index_name)
+    # view index stats
+    index.describe_index_stats()
+    query = request.data.get('prompt', '')
+    # create the query vector
+    xq = model.encode(query).tolist()
+
+    # now query
+    xc = index.query(vector=xq, top_k=10, include_metadata=True)
+
+    for result in xc['matches']:
+        #print(f"{round(result['score'], 2)}: {result['metadata']['text']}")
+        query = f"{round(result['score'], 2)}: {result['metadata']['text']}" + query
+    client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+    completion = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a geoeconomic analyst that uses evidence in documents to answer "
+                                          "questions. Using the given documents answer the question given.."},
+            {"role": "user", "content": query}
+        ]
+    )
+
+
+    res = completion.choices[0].message.content
+    print(res)
+
+
+    #print(query)
+
+    return Response({"response": res, "\nSources": ""})
 
 @api_view(['POST'])
 def upload_file(request):
@@ -60,7 +129,7 @@ def gpt35turboQuestion(data):
 
 
 @api_view(['POST'])
-def realQuestion(request):
+def realQuestion2(request):
     pdfs = pickPDF(request.data.get('prompt', ''))
     path = "./mattprojecttry2/summariesAndDocuments/text"
     context = ""
